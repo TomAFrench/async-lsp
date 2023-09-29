@@ -46,9 +46,16 @@
 //! We provide a wrapper method `PipeStdin::lock_tokio` for an `tokio::io::AsyncRead`
 //! compatible interface. [`PipeStdout`] works in class. All of them are gated under feature
 //! `tokio`.
-use std::io::{self, Error, ErrorKind, IoSlice, Read, Result, StdinLock, StdoutLock, Write};
+use std::io::{
+    self, Error, ErrorKind, IoSlice, IoSliceMut, Read, Result, StdinLock, StdoutLock, Write,
+};
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 
+use futures::{AsyncRead, AsyncWrite};
 use rustix::fs::{fcntl_getfl, fcntl_setfl, fstat, FileType, OFlags};
 
 #[derive(Debug)]
@@ -191,6 +198,75 @@ impl Write for PipeStdout {
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> Result<usize> {
         <&PipeStdout>::write_vectored(&mut &*self, bufs)
+    }
+}
+
+impl AsyncRead for PipeStdin {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            match (*self).read(buf) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+        }
+    }
+
+    fn poll_read_vectored(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            match (*self).read_vectored(bufs) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+        }
+    }
+}
+
+impl AsyncWrite for PipeStdout {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            match (*self).write(buf) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+        }
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            match (*self).write_vectored(bufs) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        loop {
+            match (*self).flush() {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
+        }
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.poll_flush(cx)
     }
 }
 
